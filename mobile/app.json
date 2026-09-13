@@ -16,8 +16,10 @@
     },
     "android": {
       "package": "com.nutriai.app",
+      "versionCode": 1,
       "permissions": [
-        "READ_MEDIA_IMAGES"
+        "READ_MEDIA_IMAGES",
+        "ACCESS_COARSE_LOCATION"
       ]
     },
     "plugins": [

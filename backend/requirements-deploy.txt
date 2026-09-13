@@ -1,0 +1,42 @@
+# Nutri-AI backend — hosted deployment dependencies.
+#
+# This is requirements.txt WITHOUT torch/torchvision/ultralytics/timm.
+#
+# Why a second file instead of a flag: the torch CPU wheel plus its transitive
+# deps is ~2.5 GB installed. On a 512 MB Render instance that is not a slow
+# build, it is a failed one — and none of it would ever be loaded, because the
+# hosted pipeline offloads the one stage that needs torch to the classifier
+# Space (CLASSIFIER_URL) and takes the guarded heuristic path for the rest.
+#
+# Every torch import in the backend is wrapped in try/except with a classical-CV
+# fallback (classify.py, depth.py, detection.py, calorieclip.py,
+# food_segmentation.py, indian_food_classifier.py), so absence is a supported
+# state, not a broken one. The pipeline reports engine="heuristic" for those
+# stages and still returns a full answer for every meal photo.
+#
+# Local development still uses requirements.txt — keep the two in sync when
+# adding a non-torch dependency.
+
+# --- Core service -----------------------------------------------------------
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9      # multipart/form-data for image upload
+pydantic>=2.6
+
+# --- Persistence ------------------------------------------------------------
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1         # Postgres driver — required here, unlike locally,
+                             # because a hosted box has no persistent SQLite file
+
+# --- Auth -------------------------------------------------------------------
+PyJWT>=2.8                   # password hashing uses stdlib hashlib.pbkdf2_hmac
+
+# --- Imaging + numerics (the fallback engine needs only these) --------------
+pillow>=10.2
+numpy>=1.26
+scipy>=1.12
+scikit-learn>=1.4
+
+# --- Nutrition source -------------------------------------------------------
+httpx>=0.26                  # USDA FoodData Central client; also the transport
+                             # for CLASSIFIER_URL calls to the classifier Space

@@ -1,0 +1,90 @@
+# Render blueprint for the Nutri-AI backend.
+#
+# Committing this instead of clicking through the dashboard means the service
+# is reproducible: `render blueprint launch`, or New > Blueprint in the UI
+# pointed at this repo, recreates it exactly.
+#
+# Scope: this file deploys ONLY the API. The classifier runs separately on a
+# Hugging Face Space (see model_api/) and is consumed over CLASSIFIER_URL —
+# that split is what lets this service fit in 512 MB. See DEPLOY.md.
+
+services:
+  - type: web
+    name: nutriai-api
+    runtime: docker
+    plan: free
+    region: singapore          # closest Render region to the expected users
+    dockerfilePath: ./backend/Dockerfile
+    # Root, not ./backend — the Dockerfile's COPY paths are repo-relative so
+    # that .dockerignore and the build context have one obvious origin.
+    dockerContext: .
+    # /api/health, not /health — every route in main.py carries the /api
+    # prefix except /media/{id}. Pointed at the wrong path, Render's health
+    # check fails forever and it restarts a service that is actually fine.
+    healthCheckPath: /api/health
+    autoDeploy: false          # deploy on an explicit push, not every commit
+
+    envVars:
+      # --- Secrets: set these in the dashboard, never in git ---------------
+      # sync:false means "prompt me, store it encrypted, keep it out of the
+      # blueprint". Render will ask for each of these on first launch.
+      - key: DATABASE_URL
+        sync: false            # Postgres URL (Neon/Supabase/Render Postgres)
+      - key: CLASSIFIER_URL
+        sync: false            # https://<user>-<space>.hf.space/classify
+      - key: CLASSIFIER_TOKEN
+        sync: false            # must equal API_TOKEN set on the Space
+      - key: USDA_API_KEY
+        sync: false
+
+      # Render generates a strong random value and keeps it stable across
+      # deploys. This is the one setting that must NOT fall through to the
+      # default in config.py ("dev-only-insecure-secret-change-me") — that
+      # value is public in the repo, and anyone who reads it could mint a
+      # valid JWT for any account.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # --- Torch stages off -----------------------------------------------
+      # The image has no torch (requirements-deploy.txt). warm_models() in
+      # pipeline.py checks these flags before importing the heavy modules;
+      # leaving them on would still fail soft, but it would cost a slow,
+      # noisy startup on a box where startup time is user-visible.
+      - key: ENABLE_TORCH_MODELS
+        value: "false"
+      - key: ENABLE_CALORIECLIP
+        value: "false"
+      - key: ENABLE_SEGMENTATION
+        value: "false"
+      - key: ENABLE_INDIAN_CLASSIFICATION
+        value: "false"
+
+      # --- Service config --------------------------------------------------
+      # The APK is the only client; the Vite frontend is not deployed here.
+      - key: SERVE_FRONTEND
+        value: "false"
+      # A React Native fetch sends no Origin header, so CORS does not gate the
+      # app. Set explicitly anyway so the default localhost list is not
+      # silently what is running in production.
+      - key: CORS_ORIGINS
+        value: ""
+      # The Space sleeps after ~48h idle and cold-starts slowly. Above the
+      # 25s default because on free tiers the first request of the day pays
+      # for the container waking up, and a timeout here means a silently
+      # coarser answer for that user.
+      - key: CLASSIFIER_TIMEOUT_S
+        value: "40"
+      # One pass instead of two: halves CPU per request on a shared-core box.
+      - key: CLASSIFIER_TTA_PASSES
+        value: "1"
+      - key: PYTHON_VERSION
+        value: "3.11"
+      # joblib cannot count physical cores in a container and falls back to
+      # logical ones, so KMeans in detection.py would spin up a worker pool
+      # sized for hardware this service does not have. _warm_numeric_stack()
+      # pays that cost at boot; capping it keeps the free instance from
+      # thrashing on its single shared CPU.
+      - key: LOKY_MAX_CPU_COUNT
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"

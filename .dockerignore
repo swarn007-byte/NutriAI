@@ -1,0 +1,53 @@
+# Build context is the repo root (see render.yaml: dockerContext: .), so
+# everything not excluded here is uploaded to the builder before the first
+# layer runs. Without this file that is ~1 GB of weights and node_modules for
+# an image that needs neither — slow at best, and on a free builder, fatal.
+
+# Model weights. The API image holds no weights at all: the classifier runs on
+# a separate Hugging Face Space (model_api/) reached over CLASSIFIER_URL.
+# calorie_clip.pt alone is 579 MB.
+backend/models/
+*.pt
+*.pth
+*.onnx
+
+# The mobile client is built by EAS, not Docker.
+mobile/
+frontend/
+
+# The classifier service deploys to its own Space from its own Dockerfile.
+model_api/
+
+# Local state that must never reach a shared server: real user meal photos,
+# the dev SQLite file, and secrets.
+backend/uploads/
+data/
+*.db
+*.sqlite3
+.env
+!.env.example
+
+# VCS, caches, build artifacts
+.git/
+.gitignore
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+backend/tests/
+
+# Docs and tooling that do not belong in a runtime image
+*.md
+!backend/**/*.md
+*.pptx
+*.zip
+.claude/
+.expo/
+.DS_Store
+.idea/
+.vscode/
