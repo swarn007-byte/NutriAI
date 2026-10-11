@@ -253,6 +253,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [correction, setCorrection] = useState(null);
+  const [pendingAsset, setPendingAsset] = useState(null);
   const [upgrading, setUpgrading] = useState(false);
   const [stage, setStage] = useState(null);
   const [deletedItem, setDeletedItem] = useState(null);
@@ -383,17 +384,18 @@ export default function App() {
   }, [loadDashboardData, token]);
 
   const analyse = useCallback(
-    async (asset) => {
+    async (asset, diameterCm) => {
       if (!asset || !token) return;
       setBusy(true);
       setStage("detect");
       setError(null);
       const timers = [];
+      const diameter = Math.min(45, Math.max(12, Number(diameterCm) || plateDiameter));
       try {
         timers.push(setTimeout(() => setStage("classify"), 1500));
         timers.push(setTimeout(() => setStage("portion"), 3000));
         timers.push(setTimeout(() => setStage("nutrition"), 4500));
-        const result = await uploadMealImage(asset, token, plateDiameter, userLocation);
+        const result = await uploadMealImage(asset, token, diameter, userLocation);
         timers.push(setTimeout(() => setStage("done"), 0));
         setMeal(result);
         setScreen("results");
@@ -438,7 +440,7 @@ export default function App() {
           allowsMultipleSelection: false,
         });
         if (picked.canceled) return;
-        await analyse(picked.assets?.[0]);
+        setPendingAsset(picked.assets?.[0]);
         return;
       }
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -452,9 +454,32 @@ export default function App() {
         allowsMultipleSelection: false,
       });
       if (picked.canceled) return;
-      await analyse(picked.assets?.[0]);
+      setPendingAsset(picked.assets?.[0]);
     },
     [analyse, busy],
+  );
+
+  const confirmPlateSize = useCallback(
+    async (diameterCm) => {
+      const asset = pendingAsset;
+      setPendingAsset(null);
+      if (!asset) return;
+      const diameter = Math.min(45, Math.max(12, Number(diameterCm) || plateDiameter));
+      // Remember it — next photo opens with this size pre-selected.
+      try {
+        const fresh = await request(
+          "/api/users/me/preferences",
+          { method: "PATCH", body: JSON.stringify({ plate_diameter_cm: diameter }) },
+          token,
+        );
+        setSession((current) => (current ? { ...current, user: fresh } : current));
+        await persistSession(token, fresh);
+      } catch (reason) {
+        // Preference save is best-effort; the analysis still uses `diameter`.
+      }
+      await analyse(asset, diameter);
+    },
+    [pendingAsset, plateDiameter, token, analyse],
   );
 
   const openHistoryMeal = useCallback(
@@ -702,6 +727,13 @@ export default function App() {
         busy={busy}
         onClose={() => setCorrection(null)}
         onSave={saveCorrection}
+      />
+      <PlateSizeModal
+        asset={pendingAsset}
+        initial={plateDiameter}
+        busy={busy}
+        onClose={() => setPendingAsset(null)}
+        onConfirm={confirmPlateSize}
       />
       {busy && !stage && screen !== "results" ? (
         <View style={styles.stageOverlay}>
@@ -2663,6 +2695,88 @@ const TABS = [
   { key: "stats", icon: "stats-chart", label: "Stats" },
   { key: "profile", icon: "person", label: "You" },
 ];
+
+const PLATE_PRESETS = [
+  { label: "Small", detail: "20 cm", value: 20 },
+  { label: "Medium", detail: "26 cm", value: 26 },
+  { label: "Large", detail: "30 cm", value: 30 },
+  { label: "XL thali", detail: "34 cm", value: 34 },
+];
+
+function PlateSizeModal({ asset, initial, busy, onClose, onConfirm }) {
+  const [picked, setPicked] = useState(initial);
+  const [custom, setCustom] = useState("");
+
+  useEffect(() => {
+    if (asset) {
+      setPicked(initial);
+      setCustom("");
+    }
+  }, [asset, initial]);
+
+  const usingCustom = custom.trim().length > 0;
+  const typed = usingCustom ? parseFloat(custom) : NaN;
+  const chosen = usingCustom ? typed : picked;
+  // Empty custom field + a preset (default = last used size) is always fine;
+  // a typed value must land inside the backend's 12–45 cm window.
+  const invalid = usingCustom && !(Number.isFinite(chosen) && chosen >= 12 && chosen <= 45);
+
+  return (
+    <Modal visible={!!asset} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.sheetBackdrop}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <View style={styles.sheet}>
+            <Aurora height={200} />
+            <View style={styles.sheetGrip} />
+            <Text style={styles.sheetTitle}>How wide is the plate?</Text>
+            <Text style={styles.sheetBody}>
+              Measure straight across the rim in cm. This is the ruler for every gram on this plate — a wrong size here skews all the weights.
+            </Text>
+            <View style={styles.altRow}>
+              {PLATE_PRESETS.map((preset) => {
+                const on = !usingCustom && picked === preset.value;
+                return (
+                  <Pressable
+                    key={preset.value}
+                    style={[styles.altChip, on && styles.altChipOn]}
+                    onPress={() => {
+                      setPicked(preset.value);
+                      setCustom("");
+                    }}
+                  >
+                    <Text style={[styles.altChipText, on && styles.altChipTextOn]}>
+                      {`${preset.label} · ${preset.detail}`}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Field
+              icon="resize-outline"
+              label="Or type the exact size (12–45 cm)"
+              value={custom}
+              onChangeText={setCustom}
+              placeholder={`e.g. ${initial}`}
+              keyboardType="decimal-pad"
+            />
+            <View style={styles.sheetActions}>
+              <Pressable style={({ pressed }) => [styles.ghostBtn, styles.sheetBtn, pressed && styles.pressedSoft]} onPress={onClose}>
+                <Text style={styles.ghostBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.primaryBtn, styles.sheetBtn, pressed && styles.pressedSoft, (invalid || busy) && styles.btnDisabled]}
+                onPress={() => onConfirm(usingCustom ? typed : picked)}
+                disabled={busy || invalid}
+              >
+                {busy ? <ActivityIndicator color={C.onGreen} /> : <Text style={styles.primaryBtnText}>Analyse plate</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
+}
 
 function BottomTabs({ active, onNavigate, onScan, busy }) {
   return (

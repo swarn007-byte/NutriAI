@@ -437,6 +437,12 @@ COMPOSITION: dict[str, dict[str, Any]] = {
         potassium_mg=160, magnesium_mg=24, zinc_mg=0.6, vitamin_a_mcg=12,
         vitamin_c_mg=4, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=18,
     ),
+    "burger": _entry(
+        "Veg Burger", "fast_food", 260, 9.0, 30.0, 11.0, 0.55,
+        fiber_g=2.0, sugar_g=5.0, sodium_mg=480, calcium_mg=80, iron_mg=2.0,
+        potassium_mg=220, magnesium_mg=24, zinc_mg=0.8, vitamin_a_mcg=40,
+        vitamin_c_mg=2, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=30,
+    ),
     "masala_dosa": _entry(
         "Masala Dosa", "bread", 248, 5.0, 34.0, 10.2, 0.52,
         fiber_g=2.0, sugar_g=1.0, sodium_mg=360, calcium_mg=22, iron_mg=1.2,
@@ -533,6 +539,12 @@ PIECE_WEIGHTS: dict[str, tuple[float, float]] = {
     "apple": (182.0, 66.0),
     "momos": (32.0, 28.0),
     "vada_pav": (90.0, 140.0),
+    "masala_dosa": (160.0, 330.0),
+    "paneer_tikka": (30.0, 22.0),
+    "tandoori_chicken": (85.0, 70.0),
+    "grilled_chicken": (90.0, 75.0),
+    "chole_bhature": (180.0, 260.0),
+    "burger": (120.0, 110.0),
 }
 
 # Fail at import rather than at request time if a piece weight names a food the
@@ -540,6 +552,83 @@ PIECE_WEIGHTS: dict[str, tuple[float, float]] = {
 _orphan_pieces = sorted(set(PIECE_WEIGHTS) - set(COMPOSITION))
 if _orphan_pieces:  # pragma: no cover - import-time guard
     raise RuntimeError(f"PIECE_WEIGHTS names foods missing from COMPOSITION: {_orphan_pieces}")
+
+
+# --------------------------------------------------------------------------
+# Per-piece nutrient envelopes for countable ("sure-shot") foods.
+# --------------------------------------------------------------------------
+# A samosa is a samosa: one piece holds roughly the same kcal/protein/carbs/fat
+# no matter what the camera thinks. Geometry and the composition table can still
+# drift (bad mask, wrong density), so every *per-piece* value is clamped into a
+# [min, max] envelope and then multiplied by the piece count:
+#
+#   3 samosas  →  total must land inside [3 × min, 3 × max]
+#   value 60 with cap (10, 50) → 50 · value 5 → 10 (nearest bound wins)
+#
+# Bands are ≈ ±30% around the table-implied per-piece value
+# (`COMPOSITION per-100 g × PIECE_WEIGHTS grams`), so the envelope agrees with
+# the rate-list instead of fighting it. Keys use the same names `scale_nutrients`
+# returns, so clamping is a direct dict lookup with no renaming.
+PIECE_NUTRIENT_CAPS: dict[str, dict[str, tuple[float, float]]] = {
+    # label: {"calories": (min, max), "protein_g": ..., "carbs_g": ..., "fat_g": ...} per ONE piece
+    "samosa": {"calories": (140.0, 270.0), "protein_g": (2.4, 4.6), "carbs_g": (14.7, 28.4), "fat_g": (7.8, 15.1)},
+    "medu_vada": {"calories": (103.0, 199.0), "protein_g": (2.6, 5.0), "carbs_g": (9.6, 18.6), "fat_g": (5.9, 11.3)},
+    "papad": {"calories": (31.0, 60.0), "protein_g": (1.5, 3.0), "carbs_g": (4.4, 8.4), "fat_g": (0.8, 1.6)},
+    "poori": {"calories": (91.0, 176.0), "protein_g": (1.7, 3.2), "carbs_g": (10.3, 19.8), "fat_g": (4.9, 9.4)},
+    "roti_chapati": {"calories": (83.0, 160.0), "protein_g": (2.6, 5.1), "carbs_g": (15.8, 30.5), "fat_g": (1.1, 2.1)},
+    "naan": {"calories": (195.0, 377.0), "protein_g": (5.5, 10.7), "carbs_g": (32.1, 62.0), "fat_g": (4.8, 9.2)},
+    "paratha": {"calories": (171.0, 330.0), "protein_g": (3.8, 7.3), "carbs_g": (23.4, 45.2), "fat_g": (7.0, 13.6)},
+    "dosa": {"calories": (166.0, 321.0), "protein_g": (3.7, 7.1), "carbs_g": (24.9, 48.1), "fat_g": (5.7, 11.0)},
+    "masala_dosa": {"calories": (278.0, 536.0), "protein_g": (5.6, 10.8), "carbs_g": (38.1, 73.4), "fat_g": (11.4, 22.0)},
+    "idli": {"calories": (46.0, 89.0), "protein_g": (1.5, 2.8), "carbs_g": (9.2, 17.8), "fat_g": (0.2, 0.4)},
+    "gulab_jamun": {"calories": (94.0, 181.0), "protein_g": (1.3, 2.5), "carbs_g": (13.5, 26.0), "fat_g": (4.0, 7.7)},
+    "boiled_egg": {"calories": (54.0, 105.0), "protein_g": (4.4, 8.5), "carbs_g": (0.4, 0.7), "fat_g": (3.7, 7.2)},
+    "pizza_slice": {"calories": (196.0, 377.0), "protein_g": (8.1, 15.6), "carbs_g": (24.3, 46.8), "fat_g": (7.4, 14.2)},
+    "banana": {"calories": (74.0, 142.0), "protein_g": (0.9, 1.8), "carbs_g": (18.8, 36.3), "fat_g": (0.2, 0.5)},
+    "apple": {"calories": (66.0, 128.0), "protein_g": (0.4, 0.7), "carbs_g": (17.6, 33.9), "fat_g": (0.3, 0.5)},
+    "momos": {"calories": (38.0, 73.0), "protein_g": (1.4, 2.8), "carbs_g": (5.6, 10.7), "fat_g": (1.0, 2.0)},
+    "vada_pav": {"calories": (183.0, 352.0), "protein_g": (4.3, 8.3), "carbs_g": (22.7, 43.7), "fat_g": (8.3, 16.0)},
+    "paneer_tikka": {"calories": (49.0, 94.0), "protein_g": (3.1, 6.0), "carbs_g": (1.3, 2.4), "fat_g": (3.5, 6.8)},
+    "tandoori_chicken": {"calories": (125.0, 241.0), "protein_g": (15.5, 29.8), "carbs_g": (2.4, 4.6), "fat_g": (6.0, 11.5)},
+    "grilled_chicken": {"calories": (123.0, 237.0), "protein_g": (18.6, 36.0), "carbs_g": (0.0, 0.5), "fat_g": (4.9, 9.5)},
+    "chole_bhature": {"calories": (391.0, 753.0), "protein_g": (9.8, 19.0), "carbs_g": (42.8, 82.6), "fat_g": (19.2, 36.9)},
+    "burger": {"calories": (218.0, 421.0), "protein_g": (7.6, 14.6), "carbs_g": (25.2, 48.6), "fat_g": (9.2, 17.8)},
+}
+
+# Same import-time honesty as PIECE_WEIGHTS: every capped label must be a real
+# catalog row, otherwise the envelope prices a ghost.
+_orphan_caps = sorted(set(PIECE_NUTRIENT_CAPS) - set(COMPOSITION))
+if _orphan_caps:  # pragma: no cover - import-time guard
+    raise RuntimeError(f"PIECE_NUTRIENT_CAPS names foods missing from COMPOSITION: {_orphan_caps}")
+
+_CAPPED_MACROS: tuple[str, ...] = ("calories", "protein_g", "carbs_g", "fat_g")
+
+
+def clamp_piece_nutrients(
+    label: str, count: int | None, nutrients: dict[str, float]
+) -> tuple[dict[str, float], bool]:
+    """Clamp kcal/protein/carbs/fat into the per-piece envelope × count.
+
+    Returns `(nutrients, was_capped)`. Labels without an envelope, or a missing
+    / non-positive count, pass through untouched — only counted, sure-shot
+    foods are ever touched.
+    """
+    caps = PIECE_NUTRIENT_CAPS.get(label)
+    if caps is None or count is None or count <= 0:
+        return nutrients, False
+    clamped = dict(nutrients)
+    hit = False
+    for key in _CAPPED_MACROS:
+        bounds = caps.get(key)
+        if bounds is None:
+            continue
+        low, high = bounds[0] * count, bounds[1] * count
+        value = float(nutrients.get(key, 0.0) or 0.0)
+        fixed = min(max(value, low), high)
+        if fixed != value:
+            hit = True
+            clamped[key] = round(fixed, 1)
+    return clamped, hit
 
 
 def _row_for(label: str) -> dict[str, Any] | None:

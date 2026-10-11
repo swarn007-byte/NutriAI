@@ -948,6 +948,15 @@ def analyze_scanned(
             except Exception as exc:
                 log.debug("CalorieCLIP prediction failed for item %d (%s)", position, exc)
 
+        # ---- Piece-count nutrient envelope --------------------------------
+        # Counted foods are sure-shot: one samosa holds roughly one samosa's
+        # macros, so the scaled table value is clamped into
+        # [count × min, count × max] per piece. Nearest bound wins.
+        if count is not None:
+            nutrients, capped = nutrition.clamp_piece_nutrients(label, count, nutrients)
+            if capped:
+                geometry["nutrient_capped"] = True
+
         nutrition_ms += (time.perf_counter() - clock) * 1000
 
         items.append(
