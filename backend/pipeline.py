@@ -787,6 +787,10 @@ def analyze_scanned(
 
       1. a piece count on a countable food → `count × grams per piece`. A number
          the user can see and correct beats a number derived from a blob.
+         Exception: a count that is both auto-guessed (`piece_count_estimated`)
+         and sitting at the `MAX_PIECE_GUESS` cap is treated as untrusted and
+         falls through to geometry — a capped guess is a guess that ran out
+         of room, not a measurement.
       2. a region → `estimate_volume`, exactly as the one-shot pipeline always did
       3. neither, i.e. a hand-added item → `nutrition.nominal_portion_g`
     """
@@ -842,6 +846,22 @@ def analyze_scanned(
         clock = time.perf_counter()
         piece_weight = nutrition.piece_weight_g(label)
         count = scanned.piece_count if piece_weight is not None else None
+        if (
+            count is not None
+            and count >= MAX_PIECE_GUESS
+            and scanned.piece_count_estimated
+        ):
+            # A capped area-guess nobody corrected: the least trustworthy
+            # number in the pipeline. A big mask x per-piece math can invent
+            # phantom pieces (e.g. 2 regions x cap 12 = 24 "samosas"), so fall
+            # through to measured geometry below, which is bounded by
+            # WEIGHT_BOUNDS and flagged estimated.
+            log.info(
+                "Ignoring capped estimated piece count for %s (count=%d): "
+                "falling back to measured geometry",
+                label, count,
+            )
+            count = None
 
         if count is not None:
             weight_g = round(count * piece_weight, 1)
